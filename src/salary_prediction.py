@@ -9,6 +9,9 @@ import matplotlib.ticker as mtick
 import os
 from pathlib import Path
 import statsmodels.api as sm 
+from statsmodels.tools.eval_measures import rmse
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.stats.diagnostic import het_breuschpagan
 
 # -----------------------------
 # Configuration
@@ -279,7 +282,7 @@ def fit_initial_model(df_model, title):
     print_section(title)
 
     y = df_model[OUTCOME]
-    X = df_model.drop(columns=['salary', 'age'])
+    X = df_model.drop(columns=[OUTCOME, 'age'])
     # keep initial columns
     initial_vars = X.columns.tolist()
     X = sm.add_constant(X)
@@ -326,6 +329,88 @@ def optimize_model(y, X, inital_vars, title):
     print()
 
     return current_vars
+
+def fit_final_model(y, X, current_vars, title):
+    """
+    Fits OLS model with optimized variables only.
+    """
+    print_section(title)
+
+    final_X = sm.add_constant(X[current_vars])
+    final_results = sm.OLS(y, final_X).fit()
+
+    print(final_results.summary())
+    print()
+
+    return final_results, final_X
+
+def interpret_model(model_sig, y):
+    print("Confidence intervals")
+    print(model_sig.conf_int(alpha=0.05))
+    print(f"\nin-sample RMSE: {rmse(y, model_sig.fittedvalues)}")
+
+def check_assumptions(model_sig, final_X, final_vars):
+    """
+    Checks linearity and equal variance (residual plot, Breusch-Pagan),
+    normality of residuals (Q-Q plot), and multicollinearity (VIF).
+    """
+    print_section("Check Assumptions")
+    residuals = model_sig.resid
+    fitted = model_sig.fittedvalues
+
+    # linearity and equal variance
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.scatter(fitted, residuals, alpha=0.5, s=15)
+    ax.axhline(y=0, color='red', linestyle='--')
+    ax.set_title('Residuals vs. Fitted Values')
+    ax.set_xlabel('Fitted Values')
+    ax.set_ylabel('Residuals')
+    finish_figure(fig, 'residuals_vs_fitted.png')
+
+    bp_stat, bp_pvalue, _, _ = het_breuschpagan(residuals, final_X)
+    print(f"Breusch-Pagan p-value: {bp_pvalue:.4f}")
+
+    # normality of residuals
+    fig, ax = plt.subplots()
+    sm.qqplot(residuals, line='45', fit=True, ax=ax)
+    ax.set_title('Q-Q Plot of Residuals')
+    finish_figure(fig, 'residuals_qq.png')
+
+    # multicollinearity (computed with the constant, reported without it)
+    vif = pd.DataFrame({
+        'Variable': final_vars,
+        'VIF': [variance_inflation_factor(final_X.values, final_X.columns.get_loc(var))
+                for var in final_vars]
+    })
+    print("\nVariance Inflation Factors:")
+    print(vif.sort_values('VIF', ascending=False))
+
+def predict_example(model_sig, final_X, profile, actual=None):
+    """
+    Predicts salary for one employee profile and optionally reports the residual.
+    """
+    print_section("Example Prediction")
+
+    # one row with the same columns as the model, all zeros
+    row = pd.DataFrame(0, index=[0], columns=final_X.columns)
+    row['const'] = 1
+
+    for var, value in profile.items():
+        if var in row.columns:
+            row[var] = value
+        else:
+            print(f"Note: {var} is not in the final model and was ignored")
+
+    predicted = model_sig.predict(row)[0]
+    print(f"Predicted salary: ${predicted:,.2f}")
+
+    if actual is not None:
+        print(f"Actual salary:    ${actual:,.2f}")
+        print(f"Residual:         ${actual - predicted:,.2f}")
+
+    return predicted
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -358,6 +443,18 @@ def main():
 
     final_vars = optimize_model(y, X, initial_vars, "Backwards Stepwise Elimination")
     print()
+
+    model_sig, final_X = fit_final_model(y, X, final_vars, "Final Optimized Regression Model")
+    print()
+
+    interpret_model(model_sig, y)
+    print()
+
+    check_assumptions(model_sig, final_X, final_vars)
+
+    predict_example(model_sig, final_X,
+                {'years_of_experience': 5, 'is_male': 1, 'is_senior': 1, 'is_engineer': 1},
+                actual=110000)
 
 
 if __name__ == "__main__":
