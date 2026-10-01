@@ -7,22 +7,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import os
+from pathlib import Path
+import statsmodels.api as sm 
 
 # -----------------------------
 # Configuration
 # -----------------------------
-DATA_PATH = './data/salary_data.csv'
-CLEANED_DATA_PATH = './data/cleaned_dataset.csv'
-IMG_PATH = './reports/figures/'
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_PATH = BASE_DIR / 'data' / 'salary_data.csv'
+CLEANED_DATA_PATH = BASE_DIR / 'data' / 'cleaned_dataset.csv'
+IMG_PATH = BASE_DIR / 'reports' / 'figures'
 
+
+# constants
 OUTCOME = 'salary'
 NUM_COLS = [
     'age', 'years_of_experience'
 ]
-
 CAT_COLS = [
     'gender', 'education_level', 'job_title'
 ]
+FLAG_WORDS = ['director', 'junior', 'senior', 'manager', 'analyst', 'engineer']
+SHOW_PLOTS = False
 
 # -----------------------------
 # Utilities
@@ -77,6 +83,15 @@ def save_image(fig, filename):
     except Exception as e:
         die(f"Failed to save image: {path}", e)
 
+def finish_figure(fig, filename):
+    """
+    Save a figure, optionally show it, and close it.
+    """
+    save_image(fig, filename)
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close(fig)
+
 
 
 # -----------------------------
@@ -114,9 +129,14 @@ def clean_data(df, title):
     print(f"Missing values after clean: {df_clean.isnull().sum().sum()}")
 
     # drop error
-    print(f"\nMinumum salary before cleaning: {df_clean.salary.min()}")
+    print(f"\nMinimum salary before cleaning: {df_clean.salary.min()}")
     df_clean = df_clean[df_clean['salary'] != 350.0]
-    print(f"Mininum salary after clean: {df_clean.salary.min()}")
+    print(f"Minimum salary after clean: {df_clean.salary.min()}")
+
+    # change job_title to lowercase
+    print(f"Job titles before clean: {df_clean['job_title'].head().values}")
+    df_clean['job_title'] = df_clean['job_title'].str.lower()
+    print(f"Job titles after clean: {df_clean['job_title'].head().values}")
 
     # save cleaned data
     save_csv(df_clean, CLEANED_DATA_PATH)
@@ -159,9 +179,7 @@ def graph_data(df_clean, title):
     ax.set_xlabel('Salary')
     ax.set_ylabel('Number of Salaries')
 
-    save_image(fig, 'salary_distribution.png')
-    plt.show()
-    plt.close(fig)
+    finish_figure(fig, 'salary_distribution.png')
 
     fig, ax = plt.subplots()
     df_clean.plot(kind='box', column='salary', by='gender', ax=ax)
@@ -169,9 +187,7 @@ def graph_data(df_clean, title):
     ax.set_xlabel('Gender')
     ax.set_ylabel('Salary')
 
-    save_image(fig, 'salary_by_gender.png')
-    plt.show()
-    plt.close()
+    finish_figure(fig, 'salary_by_gender.png')
 
     fig, ax = plt.subplots()
     df_clean.plot(kind='box', column='salary', by='education_level', ax=ax)
@@ -179,9 +195,7 @@ def graph_data(df_clean, title):
     ax.set_xlabel('Education Level')
     ax.set_ylabel('Salary')
 
-    save_image(fig, 'salary_by_education.png')
-    plt.show()
-    plt.close()
+    finish_figure(fig, 'salary_by_education.png')
 
     fig, ax = plt.subplots()
     df_clean.plot(kind='scatter', x='years_of_experience', y='salary', ax=ax)
@@ -189,9 +203,7 @@ def graph_data(df_clean, title):
     ax.set_xlabel('Years of Experience')
     ax.set_ylabel('Salary')
 
-    save_image(fig, 'salary_by_experience.png')
-    plt.show()
-    plt.close()
+    finish_figure(fig, 'salary_by_experience.png')
 
     fig, ax = plt.subplots()
     df_clean.plot(kind='scatter', x='age', y='salary', ax=ax)
@@ -199,10 +211,121 @@ def graph_data(df_clean, title):
     ax.set_xlabel('Age')
     ax.set_ylabel('Salary')
 
-    save_image(fig, 'salary_by_age.png')
-    plt.show()
-    plt.close()
+    finish_figure(fig, 'salary_by_age.png')
+    
+    fig, ax = plt.subplots(figsize=(9, 5))
+    groups = []
+    labels = []
+    for kw in FLAG_WORDS:
+        salaries = df_clean.loc[df_clean['job_title'].str.contains(kw), 'salary']
+        groups.append(salaries)
+        labels.append(f"{kw}\n(n={len(salaries)})")
 
+    ax.boxplot(groups, tick_labels=labels)
+    ax.set_title('Salary by Job Title Keyword')
+    ax.set_xlabel('Title contains')
+    ax.set_ylabel('Salary')
+
+    finish_figure(fig, 'salary_by_title_keyword.png')
+    
+def check_correlation(df_clean, title):
+    """
+    Checks for correlation between age and years of experience
+    """
+    print_section(title)
+    print(f"Salary and years of experience: {df_clean['years_of_experience'].corr(df_clean['salary'])}")
+    print(f"Salary and age: {df_clean['age'].corr(df_clean['salary'])}")
+    print(f"Years of experience and age: {df_clean['years_of_experience'].corr(df_clean['age'])}")
+
+def encode_data(df_clean, title):
+    """
+    Creates job title keyword flags for modeling.
+    """
+    print_section(title)
+
+    df_model = df_clean.copy()
+
+    print("Dataset before encoding:")
+    df_model.info()
+
+    # group job titles
+    for word in FLAG_WORDS:
+        df_model['is_' + word] = df_model['job_title'].str.contains(word).astype(int)
+        print(f"is_{word}: {df_model['is_' + word].sum()} rows flagged")
+
+    df_model = df_model.drop('job_title', axis=1)
+
+    # codify gender
+    df_model['is_male'] = (df_model['gender'] == 'Male').astype(int)
+    print(f"is_male: {df_model['is_male'].sum()} rows flagged")
+    df_model = df_model.drop('gender', axis=1)
+
+    # encode education levels (baseline: Bachelor's)
+    edu = pd.get_dummies(df_model['education_level'], prefix='edu', drop_first=True, dtype=int)
+    edu.columns = edu.columns.str.lower().str.replace("'", "", regex=False)
+    print(f"Education dummies (baseline Bachelor's): {edu.sum().to_dict()}")
+    df_model = df_model.join(edu)
+    df_model = df_model.drop('education_level', axis=1)
+
+    print("\nDataset after encoding:")
+    df_model.info()
+
+    return df_model
+
+def fit_initial_model(df_model, title):
+    """
+    Fits OLS model with model dataset.
+    """
+    print_section(title)
+
+    y = df_model[OUTCOME]
+    X = df_model.drop(columns=['salary', 'age'])
+    # keep initial columns
+    initial_vars = X.columns.tolist()
+    X = sm.add_constant(X)
+
+    # Fit OLS
+    model_init = sm.OLS(y, X).fit()
+    print(model_init.summary())
+    return y, X, initial_vars
+
+def optimize_model(y, X, inital_vars, title):
+    """
+    Performs backward stepwise elimination by removing predictors with p-values greater than 0.05 until all remaining predictors are significant.
+    """
+    print_section(title)
+
+    current_vars = inital_vars.copy()
+
+    # loops thorugh the df
+    while True:
+        X_loop = sm.add_constant(X[current_vars])
+
+        # apply the model to the current variable
+        loop_model = sm.OLS(y, X_loop)
+        # fit the model
+        loop_results = loop_model.fit()
+
+        # removes the intercept so only the predictor p-values are evaluated
+        pvals = loop_results.pvalues.drop("const", errors="ignore")
+
+        # checks to see if any high p-values remain
+        if pvals.max() <= 0.05:
+            # exits loop
+            print("Done. All p-values <= 0.05.")
+            break
+
+        # store the index of the highest p-value
+        worst = pvals.idxmax()
+        print(f"Remove {worst} (p = {pvals.max():.4f})")
+        # removes the predictor with the highest p-value
+        current_vars.remove(worst)
+        
+    print("\nFinal Variables:")
+    print(current_vars)
+    print()
+
+    return current_vars
 # -----------------------------
 # Main
 # -----------------------------
@@ -222,6 +345,20 @@ def main():
     print()
 
     graph_data(df_clean, "Data vs Salary")
+    print()
+
+    check_correlation(df_clean, "Correlations Check")
+    print()
+
+    df_model = encode_data(df_clean, "Encode titles")
+    print()
+
+    y, X, initial_vars = fit_initial_model(df_model, "Initial Regression Model")
+    print()
+
+    final_vars = optimize_model(y, X, initial_vars, "Backwards Stepwise Elimination")
+    print()
+
 
 if __name__ == "__main__":
     try:
