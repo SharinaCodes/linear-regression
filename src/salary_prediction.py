@@ -3,13 +3,14 @@
 # -----------------------------
 
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import os
 from pathlib import Path
 import statsmodels.api as sm 
 from statsmodels.tools.eval_measures import rmse
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.stats.diagnostic import het_breuschpagan
 
 # -----------------------------
 # Configuration
@@ -349,14 +350,13 @@ def interpret_model(model_sig, y):
 
 def check_assumptions(model_sig, final_X, final_vars):
     """
-    Checks linearity and equal variance (residual plot, Breusch-Pagan),
-    normality of residuals (Q-Q plot), and multicollinearity (VIF).
+    Checks linearity (residual plot) and multicollinearity (VIF).
     """
     print_section("Check Assumptions")
     residuals = model_sig.resid
     fitted = model_sig.fittedvalues
 
-    # linearity and equal variance
+    # linearity
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.scatter(fitted, residuals, alpha=0.5, s=15)
     ax.axhline(y=0, color='red', linestyle='--')
@@ -364,15 +364,6 @@ def check_assumptions(model_sig, final_X, final_vars):
     ax.set_xlabel('Fitted Values')
     ax.set_ylabel('Residuals')
     finish_figure(fig, 'residuals_vs_fitted.png')
-
-    bp_stat, bp_pvalue, _, _ = het_breuschpagan(residuals, final_X)
-    print(f"Breusch-Pagan p-value: {bp_pvalue:.4f}")
-
-    # normality of residuals
-    fig, ax = plt.subplots()
-    sm.qqplot(residuals, line='45', fit=True, ax=ax)
-    ax.set_title('Q-Q Plot of Residuals')
-    finish_figure(fig, 'residuals_qq.png')
 
     # multicollinearity (computed with the constant, reported without it)
     vif = pd.DataFrame({
@@ -382,31 +373,6 @@ def check_assumptions(model_sig, final_X, final_vars):
     })
     print("\nVariance Inflation Factors:")
     print(vif.sort_values('VIF', ascending=False))
-
-def predict_example(model_sig, final_X, profile, actual=None):
-    """
-    Predicts salary for one employee profile and optionally reports the residual.
-    """
-    print_section("Example Prediction")
-
-    # one row with the same columns as the model, all zeros
-    row = pd.DataFrame(0, index=[0], columns=final_X.columns)
-    row['const'] = 1
-
-    for var, value in profile.items():
-        if var in row.columns:
-            row[var] = value
-        else:
-            print(f"Note: {var} is not in the final model and was ignored")
-
-    predicted = model_sig.predict(row)[0]
-    print(f"Predicted salary: ${predicted:,.2f}")
-
-    if actual is not None:
-        print(f"Actual salary:    ${actual:,.2f}")
-        print(f"Residual:         ${actual - predicted:,.2f}")
-
-    return predicted
 
 
 # -----------------------------
@@ -449,10 +415,6 @@ def main():
     print()
 
     check_assumptions(model_sig, final_X, final_vars)
-
-    predict_example(model_sig, final_X,
-                {'years_of_experience': 5, 'is_male': 1, 'is_senior': 1, 'is_engineer': 1},
-                actual=110000)
 
 
 if __name__ == "__main__":
